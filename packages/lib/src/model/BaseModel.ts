@@ -4,15 +4,19 @@ import { getGlobalConfig } from "../globalConfig"
 import { PropTransform } from "../propTransform"
 import { memoTransformCache } from "../propTransform/propTransform"
 import { getSnapshot } from "../snapshot/getSnapshot"
-import { SnapshotInOfModel, SnapshotInOfObject, SnapshotOutOfModel } from "../snapshot/SnapshotOf"
-import { typesModel } from "../typeChecking/model"
+import { SnapshotInOfModel, SnapshotInOfObject, SnapshotOutOfModel, SnapshotInOf } from "../snapshot/SnapshotOf"
+import { typesModel, ModelTypeInfo } from "../typeChecking/model"
 import { typeCheck } from "../typeChecking/typeCheck"
 import { TypeCheckError } from "../typeChecking/TypeCheckError"
 import { assertIsObject } from "../utils"
 import { modelIdKey, modelTypeKey } from "./metadata"
-import { modelInfoByClass } from "./modelInfo"
+import { modelInfoByClass, modelInfoByName } from "./modelInfo"
 import { internalNewModel } from "./newModel"
 import { assertIsModelClass } from "./utils"
+import { ModelProps } from '.'
+import { modelPropertiesSymbol } from './modelSymbols'
+import { ArrayTypeInfo } from '../typeChecking/array'
+import { TypeInfo } from '..'
 
 declare const propsDataTypeSymbol: unique symbol
 declare const propsCreationDataTypeSymbol: unique symbol
@@ -298,6 +302,56 @@ export function modelSnapshotInWithMetadata<M extends AnyModel>(
     [modelTypeKey]: modelInfo.name,
     [modelIdKey]: internalId,
   } as any
+}
+
+function modelSnapshotInWithMetadataRecurse(
+  typeInfo: TypeInfo | null | undefined,
+  snapshot: {},
+  modelClass?: ModelClass<any>,
+): any {
+  const modelInfo = typeInfo instanceof ModelTypeInfo ?
+    modelInfoByName[typeInfo.modelType] : modelClass ? 
+    modelInfoByClass.get(modelClass) : undefined
+  if (modelInfo) {
+    const modelProps: ModelProps = (modelInfo.class as any)[modelPropertiesSymbol]
+    const modelPropsKeys = Object.keys(modelProps)
+    const result: any = {}
+    for (let i = 0; i < modelPropsKeys.length; i++) {
+      const k = modelPropsKeys[i]
+      const v = (snapshot as any)[k]
+      if (v != null) {
+        const prop = modelProps[k]
+        const propData = prop ? prop.typeChecker ? prop.typeChecker.typeInfo : null : null
+        result[k] = modelSnapshotInWithMetadataRecurse(propData, v)
+      }
+    }
+    result[modelTypeKey] = modelInfo.name
+    result[modelIdKey] = getGlobalConfig().modelIdGenerator()
+    return result
+  } else if (typeInfo instanceof ArrayTypeInfo) {
+    if (Array.isArray(snapshot)) {
+      const modelInfo = typeInfo.itemTypeInfo
+      const result = []
+      for (let i = 0; i < snapshot.length; i++) {
+        result[i] = modelSnapshotInWithMetadataRecurse(modelInfo, snapshot[i])
+      }
+      return result
+    } else {
+      return null
+    }
+  } else {
+    return snapshot
+  }
+}
+
+export function modelSnapshotInWithMetadataDeep<M extends AnyModel>(
+  modelClass: ModelClass<M>,
+  snapshot: SnapshotInOfModel<M>,
+): SnapshotInOf<M> {
+  assertIsModelClass(modelClass, "modelClass")
+  assertIsObject(snapshot, "initialData")
+
+  return modelSnapshotInWithMetadataRecurse(undefined, snapshot, modelClass)
 }
 
 /**
